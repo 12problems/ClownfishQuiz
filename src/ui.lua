@@ -1,19 +1,344 @@
--- UI layer. FIRST PASS / PLACEHOLDER: opens an overlay, saves draft on match found.
--- The real scenario screen (joker sprites, deck viewer clone, move line) is built with Rob
--- iteratively; this file is the integration surface (open / close / on_match_found).
+-- Quiz UI (keyboard-first, mouse works). Phase 1: "pick a move" categories.
+-- Reads only shipped scenarios; never touches run state.
 local UI = { open = false }
+local R = { line = '', other = '', why = '', conf = '-', skip = '', status = '', reveal = '', focus_label = '', pos = '' }
+local S = { idx = 1, moves = {}, other = '', why = '', conf = '', skipped = false, skip_reason = '', focus = 'moves', saved = false }
+local list, answered, grader
 
-function UI.on_match_found()
-  if not UI.open then return end
-  -- TODO: save draft of the in-progress answer, show "Match found - progress saved" for ~1s,
-  -- then G.FUNCS.exit_overlay_menu().
-  UI.open = false
-  G.FUNCS.exit_overlay_menu()
+local FIELDS = { 'moves', 'other', 'why', 'conf', 'skip' }
+local FIELD_LABEL = { moves = 'Moves (press 1-9 or click)', other = 'Other move (type)', why = 'Why (type)', conf = 'Confidence (press 1-5)', skip = 'Skip reason (type)' }
+
+-- ---------- file helpers ----------
+local fs = {
+  read = function(p) local s = love.filesystem.read(p); return s end,
+  write = function(p, s) love.filesystem.createDirectory(CFQ.DIR); return love.filesystem.write(p, s) end,
+}
+local function grader_name()
+  if CFQ.config and CFQ.config.grader_name and CFQ.config.grader_name ~= '' then return CFQ.config.grader_name end
+  local n = MPAPI and MPAPI.connection_state and MPAPI.connection_state.display_name
+  return (n and n ~= '') and n or 'player'
+end
+local function answers_path() return CFQ.answers.path(CFQ.DIR, grader) end
+local function draft_path() return CFQ.DIR .. '/draft_' .. CFQ.answers.safe_name(grader) .. '.json' end
+
+-- ---------- joker sprites ----------
+local name_index
+local function norm(s) return (tostring(s):lower():gsub('%s*%(mp%)%s*$', ''):gsub('[^%w]', '')) end
+local function build_index()
+  name_index = {}
+  for k, c in pairs(G.P_CENTERS or {}) do
+    if c.set == 'Joker' then
+      local nm
+      local ok = pcall(function() nm = localize { type = 'name_text', set = 'Joker', key = k } end)
+      if ok and nm and nm ~= 'ERROR' then
+        local n = norm(nm)
+        if not name_index[n] or k:find('mp') then name_index[n] = c end -- prefer MP variants on collision
+      end
+    end
+  end
+end
+local function find_center(name)
+  if not name_index then build_index() end
+  return name_index[norm(name)]
+end
+local function mini_sprite(name)
+  local c = find_center(name)
+  if not c or not c.pos then return nil end
+  local atlas = G.ASSET_ATLAS[c.atlas or 'Joker'] or G.ASSET_ATLAS['Joker']
+  local ok, sp = pcall(function() return Sprite(0, 0, 0.62, 0.83, atlas, c.pos) end)
+  if not ok or not sp then return nil end
+  sp.states.drag.can = false
+  return sp
+end
+
+-- ---------- node helpers ----------
+local function T(text, scale, colour)
+  return { n = G.UIT.T, config = { text = text, scale = scale or 0.3, colour = colour or G.C.UI.TEXT_LIGHT, shadow = true } }
+end
+local function TREF(tbl, key, scale, colour)
+  return { n = G.UIT.T, config = { ref_table = tbl, ref_value = key, scale = scale or 0.3, colour = colour or G.C.UI.TEXT_LIGHT, shadow = true } }
+end
+local function row(nodes, cfg) cfg = cfg or {}; cfg.align = cfg.align or 'cl'; return { n = G.UIT.R, config = cfg, nodes = nodes } end
+local function col(nodes, cfg) cfg = cfg or {}; cfg.align = cfg.align or 'cl'; return { n = G.UIT.C, config = cfg, nodes = nodes } end
+
+local function trunc(s, n) s = tostring(s or ''); if #s > n then return s:sub(1, n - 1) .. '..' end return s end
+
+local function joker_boxes(p)
+  local boxes = {}
+  for _, item in ipairs(CFQ.util.split_list(p.jokers)) do
+    local name = item:match('^(.-)%s*%[') or item
+    local sell = item:match('sells %$(%d+)')
+    local kids = {}
+    local sp = mini_sprite(name)
+    if sp then kids[#kids + 1] = row({ { n = G.UIT.O, config = { object = sp } } }, { align = 'cm' }) end
+    kids[#kids + 1] = row({ T(trunc(name, 14), 0.2) }, { align = 'cm', maxw = 1.1 })
+    if sell then kids[#kids + 1] = row({ T('$' .. sell, 0.18, G.C.MONEY) }, { align = 'cm' }) end
+    boxes[#boxes + 1] = col(kids, { align = 'tm', padding = 0.04, minw = 0.9 })
+  end
+  if #boxes == 0 then boxes[1] = T('(no jokers)', 0.25) end
+  return boxes
+end
+
+local function info_rows(p)
+  local rows = {}
+  local function add(label, val)
+    if val and val ~= '' then
+      rows[#rows + 1] = row({ T(label .. ' ', 0.26, G.C.UI.TEXT_INACTIVE), T(trunc(val, 120), 0.26) })
+    end
+  end
+  add('Money', '$' .. tostring(p.money))
+  add('Lives', tostring(p.lives_me) .. ' vs ' .. tostring(p.lives_opp))
+  add('Next', tostring(p.next_blind))
+  add('Hands/discards', tostring(p.hands) .. ' / ' .. tostring(p.discards) .. '   hand size ' .. tostring(p.hand_size) .. '   joker slots ' .. tostring(p.joker_slots))
+  add('PvP history', p.pvp_history)
+  add('Vouchers', p.vouchers)
+  add('Consumables', p.consumables)
+  add('Hand levels', p.hand_levels)
+  add('In shop/pack', p.offers)
+  add('Deck', trunc(p.deck_summary, 160))
+  return rows
+end
+
+-- ---------- state ----------
+local function refresh_text()
+  local parts = {}
+  for i, m in ipairs(S.moves) do parts[#parts + 1] = i .. '. ' .. m end
+  R.line = #parts > 0 and table.concat(parts, '   ') or '(click or press a number)'
+  R.other = S.other .. (S.focus == 'other' and '_' or '')
+  R.why = S.why .. (S.focus == 'why' and '_' or '')
+  R.conf = (S.conf ~= '' and S.conf or '-') .. (S.focus == 'conf' and ' (type 1-5)' or '')
+  R.skip = S.skip_reason .. (S.focus == 'skip' and '_' or '')
+  R.focus_label = 'Typing in: ' .. FIELD_LABEL[S.focus] .. '   (Tab = next field)'
+  local pos = list and list[S.idx]
+  R.pos = pos and ('Question ' .. S.idx .. ' of ' .. #list .. '   (' .. pos.category .. ')   answered ' .. (function() local n = 0 for _ in pairs(answered or {}) do n = n + 1 end return n end)()) or ''
+  if S.opts then for i, o in ipairs(S.opts) do
+    local at
+    for j, m in ipairs(S.moves) do if m == o then at = j end end
+    R.opts[i] = (at and ('[' .. at .. '] ') or '    ') .. i .. ') ' .. o
+  end end
+end
+
+local function write_draft()
+  local p = list and list[S.idx]
+  if not p then return end
+  local d = { position_id = p.position_id, moves = S.moves, other = S.other, why = S.why, conf = S.conf, skipped = S.skipped, skip_reason = S.skip_reason }
+  fs.write(draft_path(), JSON.encode(d))
+end
+local function load_draft(p)
+  S.moves, S.other, S.why, S.conf, S.skipped, S.skip_reason, S.saved = {}, '', '', '', false, '', false
+  local raw = fs.read(draft_path())
+  if raw and raw ~= '' then
+    local ok, d = pcall(JSON.decode, raw)
+    if ok and d and d.position_id == p.position_id then
+      S.moves, S.other, S.why, S.conf = d.moves or {}, d.other or '', d.why or '', d.conf or ''
+      S.skipped, S.skip_reason = d.skipped and true or false, d.skip_reason or ''
+    end
+  end
+end
+
+local function first_unanswered(from)
+  for k = 0, #list - 1 do
+    local i = (from - 1 + k) % #list + 1
+    if not answered[list[i].position_id] then return i end
+  end
+  return from
+end
+
+local function build_screen()
+  local p = list[S.idx]
+  S.opts = CFQ.util.split_list(p.options)
+  R.opts = {}
+  refresh_text()
+  local left = {
+    row({ TREF(R, 'pos', 0.28, G.C.UI.TEXT_INACTIVE) }),
+    row({ T(p.stake .. ' - ' .. p.deck .. ' - ante ' .. tostring(p.ante), 0.3) }),
+    row(joker_boxes(p), { align = 'tl', padding = 0.05 }),
+  }
+  for _, r in ipairs(info_rows(p)) do left[#left + 1] = r end
+  left[#left + 1] = row({ T('Drag a saved answers_<name>.csv onto the game window to import old answers.', 0.2, G.C.UI.TEXT_INACTIVE) }, { padding = 0.05 })
+
+  local right = { row({ T('What would you do? Order matters.', 0.3) }), row({ TREF(R, 'line', 0.26, G.C.GOLD) }, { padding = 0.04 }) }
+  for i, _ in ipairs(S.opts) do
+    right[#right + 1] = row({ TREF(R.opts, i, 0.26) }, {
+      padding = 0.04, r = 0.05, hover = true, colour = G.C.BLUE, button = 'cfq_opt', ref_table = { i = i }, minw = 7.2, shadow = true,
+    })
+  end
+  local function field(name, key)
+    return row({ T(FIELD_LABEL[name] .. ': ', 0.22, G.C.UI.TEXT_INACTIVE), TREF(R, key, 0.26) },
+      { padding = 0.04, r = 0.05, hover = true, colour = G.C.BLACK, button = 'cfq_focus', ref_table = { f = name }, minw = 7.2 })
+  end
+  right[#right + 1] = field('other', 'other')
+  right[#right + 1] = field('why', 'why')
+  right[#right + 1] = field('conf', 'conf')
+  right[#right + 1] = field('skip', 'skip')
+  right[#right + 1] = row({ TREF(R, 'focus_label', 0.2, G.C.UI.TEXT_INACTIVE) })
+  right[#right + 1] = row({
+    { n = G.UIT.C, config = { align = 'cm', padding = 0.08, r = 0.1, hover = true, colour = G.C.GREEN, button = 'cfq_save', shadow = true, minw = 2.8 }, nodes = { T('Save + next (Ctrl+Enter)', 0.26) } },
+    { n = G.UIT.C, config = { align = 'cm', padding = 0.08, r = 0.1, hover = true, colour = G.C.GREY, button = 'cfq_skip', shadow = true, minw = 2.2 }, nodes = { T('Skip (needs reason)', 0.26) } },
+  }, { align = 'cm', padding = 0.05 })
+  right[#right + 1] = row({ TREF(R, 'status', 0.28, G.C.GOLD) })
+  right[#right + 1] = row({ TREF(R, 'reveal', 0.24, G.C.UI.TEXT_LIGHT) })
+
+  return create_UIBox_generic_options({
+    back_func = 'cfq_close', back_label = 'Close (Esc)', minw = 15, padding = 0.05,
+    contents = { col(left, { align = 'tl', padding = 0.08, minw = 7.5 }), col(right, { align = 'tl', padding = 0.08, minw = 7.5 }) },
+  })
+end
+
+local function show_position()
+  local p = list[S.idx]
+  load_draft(p)
+  S.focus = 'moves'
+  R.status, R.reveal = '', ''
+  G.FUNCS.overlay_menu { definition = build_screen() }
 end
 
 function UI.open_quiz()
-  UI.open = true
-  -- TODO: G.FUNCS.overlay_menu{ definition = create_UIBox_cfq_quiz() }
+  if UI.open then return end
+  local ok, err = pcall(function()
+    grader = grader_name()
+    local all = CFQ.data.load()
+    list = CFQ.data.playable(all)
+    table.sort(list, function(a, b) return a.position_id < b.position_id end)
+    answered = CFQ.answers.answered_set(CFQ.answers.load(fs, answers_path()), grader)
+    S.idx = first_unanswered(1)
+    UI.open = true
+    show_position()
+  end)
+  if not ok then UI.open = false; sendWarnMessage('ClownfishQuiz open: ' .. tostring(err), 'ClownfishQuiz') end
+end
+
+function UI.close()
+  if UI.open then write_draft() end
+  UI.open = false
+  if G.OVERLAY_MENU then G.FUNCS.exit_overlay_menu() end
+end
+
+function UI.on_match_found()
+  if not UI.open then return end
+  write_draft()
+  R.status = 'Match found - progress saved'
+  refresh_text()
+  G.E_MANAGER:add_event(Event({ trigger = 'after', delay = 1.2, blockable = false, func = function() UI.close(); return true end }))
+end
+
+-- ---------- actions ----------
+local function toggle_move(i)
+  local o = S.opts and S.opts[i]
+  if not o then return end
+  for j, m in ipairs(S.moves) do
+    if m == o then table.remove(S.moves, j); refresh_text(); write_draft(); return end
+  end
+  S.moves[#S.moves + 1] = o
+  refresh_text(); write_draft()
+end
+
+local function save_and_next()
+  local p = list[S.idx]
+  if not S.saved then
+    local best = table.concat(S.moves, ' > ')
+    if S.other ~= '' then best = (best ~= '' and best .. ' > ' or '') .. 'Other: ' .. S.other end
+    if best == '' and not S.skipped then R.status = 'Pick at least one move (or Skip with a reason)'; return end
+    if S.skipped and S.skip_reason == '' then R.status = 'Skipping needs a reason'; S.focus = 'skip'; refresh_text(); return end
+    local row_ = { position_id = p.position_id, grader = grader, timestamp = os.date('!%Y-%m-%dT%H:%M:%SZ'),
+      best_move = S.skipped and '' or best, confidence = S.conf, why = S.why, skipped = S.skipped and '1' or '0',
+      skip_reason = S.skip_reason, revealed_after = '1' }
+    CFQ.answers.upsert(fs, answers_path(), row_)
+    answered[p.position_id] = true
+    S.saved = true
+    R.reveal = 'The original player did: ' .. tostring(p.human_action) .. '   (Ctrl+Enter for next)'
+    R.status = 'Saved'
+    return
+  end
+  S.idx = first_unanswered(S.idx + 1)
+  show_position()
+end
+
+G.FUNCS.cfq_open = function() UI.open_quiz() end
+G.FUNCS.cfq_close = function() UI.close() end
+G.FUNCS.cfq_opt = function(e) toggle_move(e.config.ref_table.i) end
+G.FUNCS.cfq_focus = function(e) S.focus = e.config.ref_table.f; refresh_text() end
+G.FUNCS.cfq_save = function() save_and_next() end
+G.FUNCS.cfq_skip = function() S.skipped = true; S.focus = 'skip'; refresh_text() end
+
+-- ---------- keyboard ----------
+local function next_field(dir)
+  local at = 1
+  for i, f in ipairs(FIELDS) do if f == S.focus then at = i end end
+  S.focus = FIELDS[(at - 1 + dir) % #FIELDS + 1]
+  refresh_text()
+end
+local function field_key(name) return ({ other = 'other', why = 'why', skip = 'skip_reason' })[name] end
+
+function UI.handle_key(key)
+  if key == 'f8' then if UI.open then UI.close() else UI.open_quiz() end return true end
+  if not UI.open then return false end
+  local ctrl = love.keyboard.isDown('lctrl', 'rctrl')
+  if key == 'escape' then UI.close(); return true end
+  if key == 'tab' then next_field(love.keyboard.isDown('lshift', 'rshift') and -1 or 1); return true end
+  if (key == 'return' or key == 'kpenter') and ctrl then save_and_next(); return true end
+  local f = S.focus
+  if f == 'moves' then
+    local d = tonumber(key:match('^kp(%d)$') or key:match('^(%d)$') or '')
+    if d and d >= 1 then toggle_move(d) elseif key == 'backspace' then table.remove(S.moves); refresh_text(); write_draft() end
+  elseif f == 'conf' then
+    local d = tonumber(key:match('^kp(%d)$') or key:match('^(%d)$') or '')
+    if d and d >= 1 and d <= 5 then S.conf = tostring(d); refresh_text(); write_draft() end
+  else
+    local k = field_key(f)
+    if key == 'backspace' then
+      local s = (f == 'other' and S.other) or (f == 'why' and S.why) or S.skip_reason
+      s = s:sub(1, math.max(0, #s - 1)); if f == 'other' then S.other = s elseif f == 'why' then S.why = s else S.skip_reason = s; S.skipped = s ~= '' end
+      refresh_text(); write_draft()
+    end
+  end
+  return true -- swallow all keys while open so the game's shortcuts don't fire
+end
+
+function UI.handle_text(t)
+  if not UI.open then return false end
+  local f = S.focus
+  if f == 'other' then S.other = S.other .. t
+  elseif f == 'why' then S.why = S.why .. t
+  elseif f == 'skip' then S.skip_reason = S.skip_reason .. t; S.skipped = true
+  else return true end
+  refresh_text(); write_draft()
+  return true
+end
+
+function UI.handle_drop(file)
+  local name = file:getFilename() or ''
+  if not name:lower():match('answers.*%.csv$') then return false end
+  file:open('r'); local text = file:read(); file:close()
+  grader = grader_name()
+  local added, skipped = CFQ.answers.import_text(fs, answers_path(), text)
+  if answered then answered = CFQ.answers.answered_set(CFQ.answers.load(fs, answers_path()), grader) end
+  R.status = 'Imported ' .. added .. ' answers (' .. skipped .. ' already present)'
+  return true
+end
+
+function UI.install_input()
+  local kp, ti, fd = love.keypressed, love.textinput, love.filedropped
+  love.keypressed = function(key, ...) if UI.handle_key(key) then return end return kp(key, ...) end
+  love.textinput = function(t) if UI.handle_text(t) then return end if ti then return ti(t) end end
+  love.filedropped = function(file) if UI.handle_drop(file) then return end if fd then return fd(file) end end
+end
+
+-- ---------- main-menu button ----------
+function UI.install_menu_button()
+  local orig = create_UIBox_main_menu_buttons
+  create_UIBox_main_menu_buttons = function(...)
+    local t = orig(...)
+    local ok = pcall(function()
+      local right = t.nodes[2]
+      local keep = {}
+      for i = 1, 3 do if right.nodes[i] then keep[#keep + 1] = right.nodes[i] end end
+      table.insert(keep, 1, { n = G.UIT.R, config = { align = 'cm', padding = 0.1 }, nodes = {
+        UIBox_button { id = 'cfq_menu_button', button = 'cfq_open', colour = G.C.ORANGE, minw = 3, minh = 0.7, label = { 'Clownfish Quiz' }, scale = 0.35 } } })
+      right.nodes = keep
+    end)
+    return t
+  end
 end
 
 return UI

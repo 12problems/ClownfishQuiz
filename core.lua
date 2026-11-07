@@ -19,3 +19,5 @@ CFQ.ui = load_src('ui')
 
 CFQ.config = CFQ.config or {}
 CFQ.hooks.install()
+CFQ.ui.install_input()
+CFQ.ui.install_menu_button()
