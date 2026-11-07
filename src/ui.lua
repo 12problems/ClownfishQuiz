@@ -1,7 +1,7 @@
 -- Quiz UI (keyboard-first, mouse works). Phase 1: "pick a move" categories.
 -- Reads only shipped scenarios; never touches run state.
 local UI = { open = false }
-local R = { line = '', other = '', why = '', conf = '-', skip = '', status = '', reveal = '', focus_label = '', pos = '' }
+local R = { banner = '', rev1 = '', rev2 = '', rev3 = '', rev4 = '', line = '', other = '', why = '', conf = '-', skip = '', status = '', reveal = '', focus_label = '', pos = '' }
 local S = { idx = 1, moves = {}, other = '', why = '', conf = '', skipped = false, skip_reason = '', focus = 'moves', saved = false }
 local list, answered, grader
 
@@ -61,6 +61,16 @@ end
 local function row(nodes, cfg) cfg = cfg or {}; cfg.align = cfg.align or 'cl'; return { n = G.UIT.R, config = cfg, nodes = nodes } end
 local function col(nodes, cfg) cfg = cfg or {}; cfg.align = cfg.align or 'cl'; return { n = G.UIT.C, config = cfg, nodes = nodes } end
 
+local LABEL = { 0.78, 0.8, 0.85, 1 }
+local function wrap(s, n)
+  local lines, cur = {}, ''
+  for w in tostring(s or ''):gmatch('%S+') do
+    if #cur + #w + 1 > n and cur ~= '' then lines[#lines + 1] = cur; cur = w else cur = (cur == '' and w) or (cur .. ' ' .. w) end
+  end
+  if cur ~= '' then lines[#lines + 1] = cur end
+  return lines
+end
+
 local function trunc(s, n) s = tostring(s or ''); if #s > n then return s:sub(1, n - 1) .. '..' end return s end
 
 local function joker_boxes(p)
@@ -71,7 +81,7 @@ local function joker_boxes(p)
     local kids = {}
     local sp = mini_sprite(name)
     if sp then kids[#kids + 1] = row({ { n = G.UIT.O, config = { object = sp } } }, { align = 'cm' }) end
-    kids[#kids + 1] = row({ T(trunc(name, 14), 0.2) }, { align = 'cm', maxw = 1.1 })
+    kids[#kids + 1] = row({ T(trunc(name, 18), 0.19) }, { align = 'cm', maxw = 1.1 })
     if sell then kids[#kids + 1] = row({ T('$' .. sell, 0.18, G.C.MONEY) }, { align = 'cm' }) end
     boxes[#boxes + 1] = col(kids, { align = 'tm', padding = 0.04, minw = 0.9 })
   end
@@ -83,7 +93,10 @@ local function info_rows(p)
   local rows = {}
   local function add(label, val)
     if val and val ~= '' then
-      rows[#rows + 1] = row({ T(label .. ' ', 0.26, G.C.UI.TEXT_INACTIVE), T(trunc(val, 120), 0.26) })
+      local lines = wrap(val, 70)
+      for i, ln in ipairs(lines) do
+        rows[#rows + 1] = row({ T(i == 1 and (label .. ' ') or '    ', 0.26, LABEL), T(ln, 0.26) })
+      end
     end
   end
   add('Money', '$' .. tostring(p.money))
@@ -95,7 +108,7 @@ local function info_rows(p)
   add('Consumables', p.consumables)
   add('Hand levels', p.hand_levels)
   add('In shop/pack', p.offers)
-  add('Deck', trunc(p.deck_summary, 160))
+  add('Deck', p.deck_summary)
   return rows
 end
 
@@ -114,7 +127,7 @@ local function refresh_text()
   if S.opts then for i, o in ipairs(S.opts) do
     local at
     for j, m in ipairs(S.moves) do if m == o then at = j end end
-    R.opts[i] = (at and ('[' .. at .. '] ') or '    ') .. i .. ') ' .. o
+    R.opts[i] = i .. ') ' .. o .. (at and ('     << ' .. at) or '')
   end end
 end
 
@@ -124,6 +137,7 @@ local function write_draft()
   local d = { position_id = p.position_id, moves = S.moves, other = S.other, why = S.why, conf = S.conf, skipped = S.skipped, skip_reason = S.skip_reason }
   fs.write(draft_path(), JSON.encode(d))
 end
+function write_draft_clear() fs.write(draft_path(), '') end
 local function load_draft(p)
   S.moves, S.other, S.why, S.conf, S.skipped, S.skip_reason, S.saved = {}, '', '', '', false, '', false
   local raw = fs.read(draft_path())
@@ -146,38 +160,49 @@ end
 
 local function build_screen()
   local p = list[S.idx]
-  S.opts = CFQ.util.split_list(p.options)
+  S.opts = {}
+  do
+    local all = CFQ.util.split_list(p.options)
+    local function base(o) return (o:gsub('%s*%(.*$', '')) end
+    for i, o in ipairs(all) do
+      local dup = false
+      if i == #all and i > 1 then for j = 1, i - 1 do if base(all[j]) == base(o) then dup = true end end end
+      if not dup then S.opts[#S.opts + 1] = o end
+    end
+  end
   R.opts = {}
   refresh_text()
   local left = {
-    row({ TREF(R, 'pos', 0.28, G.C.UI.TEXT_INACTIVE) }),
+    row({ TREF(R, 'banner', 0.4, G.C.GOLD) }, { align = 'cm', minh = 0.5 }),
+    row({ TREF(R, 'pos', 0.28, LABEL) }),
     row({ T(p.stake .. ' - ' .. p.deck .. ' - ante ' .. tostring(p.ante), 0.3) }),
     row(joker_boxes(p), { align = 'tl', padding = 0.05 }),
   }
   for _, r in ipairs(info_rows(p)) do left[#left + 1] = r end
-  left[#left + 1] = row({ T('Drag a saved answers_<name>.csv onto the game window to import old answers.', 0.2, G.C.UI.TEXT_INACTIVE) }, { padding = 0.05 })
+  left[#left + 1] = row({ T('Drag a saved answers_<name>.csv onto the game window to import old answers.', 0.2, LABEL) }, { padding = 0.05 })
 
   local right = { row({ T('What would you do? Order matters.', 0.3) }), row({ TREF(R, 'line', 0.26, G.C.GOLD) }, { padding = 0.04 }) }
   for i, _ in ipairs(S.opts) do
     right[#right + 1] = row({ TREF(R.opts, i, 0.26) }, {
-      padding = 0.04, r = 0.05, hover = true, colour = G.C.BLUE, button = 'cfq_opt', ref_table = { i = i }, minw = 7.2, shadow = true,
+      padding = 0.04, r = 0.05, hover = true, colour = G.C.BLUE, button = 'cfq_opt', ref_table = { i = i }, minw = 6.8, shadow = true,
     })
   end
   local function field(name, key)
-    return row({ T(FIELD_LABEL[name] .. ': ', 0.22, G.C.UI.TEXT_INACTIVE), TREF(R, key, 0.26) },
-      { padding = 0.04, r = 0.05, hover = true, colour = G.C.BLACK, button = 'cfq_focus', ref_table = { f = name }, minw = 7.2 })
+    return row({ T(FIELD_LABEL[name] .. ': ', 0.22, LABEL), TREF(R, key, 0.26) },
+      { padding = 0.04, r = 0.05, hover = true, colour = G.C.BLACK, button = 'cfq_focus', ref_table = { f = name }, minw = 6.8 })
   end
   right[#right + 1] = field('other', 'other')
   right[#right + 1] = field('why', 'why')
   right[#right + 1] = field('conf', 'conf')
   right[#right + 1] = field('skip', 'skip')
-  right[#right + 1] = row({ TREF(R, 'focus_label', 0.2, G.C.UI.TEXT_INACTIVE) })
+  right[#right + 1] = row({ TREF(R, 'focus_label', 0.2, LABEL) })
   right[#right + 1] = row({
     { n = G.UIT.C, config = { align = 'cm', padding = 0.08, r = 0.1, hover = true, colour = G.C.GREEN, button = 'cfq_save', shadow = true, minw = 2.8 }, nodes = { T('Save + next (Ctrl+Enter)', 0.26) } },
     { n = G.UIT.C, config = { align = 'cm', padding = 0.08, r = 0.1, hover = true, colour = G.C.GREY, button = 'cfq_skip', shadow = true, minw = 2.2 }, nodes = { T('Skip (needs reason)', 0.26) } },
   }, { align = 'cm', padding = 0.05 })
   right[#right + 1] = row({ TREF(R, 'status', 0.28, G.C.GOLD) })
-  right[#right + 1] = row({ TREF(R, 'reveal', 0.24, G.C.UI.TEXT_LIGHT) })
+  for _, k in ipairs({ 'rev1', 'rev2', 'rev3', 'rev4' }) do right[#right + 1] = row({ TREF(R, k, 0.24, G.C.UI.TEXT_LIGHT) }) end
+  right[#right + 1] = row({ TREF(R, 'reveal', 0.22, LABEL) })
 
   return create_UIBox_generic_options({
     back_func = 'cfq_close', back_label = 'Close (Esc)', minw = 15, padding = 0.05,
@@ -189,7 +214,7 @@ local function show_position()
   local p = list[S.idx]
   load_draft(p)
   S.focus = 'moves'
-  R.status, R.reveal = '', ''
+  R.status, R.reveal, R.banner, R.rev1, R.rev2, R.rev3, R.rev4 = '', '', '', '', '', '', ''
   G.FUNCS.overlay_menu { definition = build_screen() }
 end
 
@@ -218,8 +243,9 @@ function UI.on_match_found()
   if not UI.open then return end
   write_draft()
   R.status = 'Match found - progress saved'
+  R.banner = 'MATCH FOUND - progress saved'
   refresh_text()
-  G.E_MANAGER:add_event(Event({ trigger = 'after', delay = 1.2, blockable = false, func = function() UI.close(); return true end }))
+  G.E_MANAGER:add_event(Event({ trigger = 'after', delay = 2.0, blockable = false, func = function() UI.close(); return true end }))
 end
 
 -- ---------- actions ----------
@@ -246,7 +272,10 @@ local function save_and_next()
     CFQ.answers.upsert(fs, answers_path(), row_)
     answered[p.position_id] = true
     S.saved = true
-    R.reveal = 'The original player did: ' .. tostring(p.human_action) .. '   (Ctrl+Enter for next)'
+    local ls = wrap('The original player did: ' .. tostring(p.human_action), 60)
+    R.rev1, R.rev2, R.rev3, R.rev4 = ls[1] or '', ls[2] or '', ls[3] or '', (ls[4] or '') .. (#ls > 4 and ' ..' or '')
+    R.reveal = 'Ctrl+Enter for next question'
+    write_draft_clear()
     R.status = 'Saved'
     return
   end
