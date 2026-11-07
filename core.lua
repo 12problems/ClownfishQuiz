@@ -15,6 +15,7 @@ CFQ.util = CFQ_UTIL
 CFQ.answers = load_src('answers')
 CFQ.data = load_src('data')
 CFQ.hooks = load_src('hooks')
+CFQ.deckview = load_src('deckview')
 CFQ.ui = load_src('ui')
 
 CFQ.config = CFQ.config or {}

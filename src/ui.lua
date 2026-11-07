@@ -108,7 +108,7 @@ local function info_rows(p)
   add('Consumables', p.consumables)
   add('Hand levels', p.hand_levels)
   add('In shop/pack', p.offers)
-  add('Deck', p.deck_summary)
+  do local short = tostring(p.deck_summary or ''):match('^(.-;.-);') or tostring(p.deck_summary or ''); add('Deck', short) end
   return rows
 end
 
@@ -127,7 +127,7 @@ local function refresh_text()
   if S.opts then for i, o in ipairs(S.opts) do
     local at
     for j, m in ipairs(S.moves) do if m == o then at = j end end
-    R.opts[i] = i .. ') ' .. o .. (at and ('     << ' .. at) or '')
+    R.opts[i] = at and ('<< ' .. at) or ''
   end end
 end
 
@@ -179,13 +179,19 @@ local function build_screen()
     row(joker_boxes(p), { align = 'tl', padding = 0.05 }),
   }
   for _, r in ipairs(info_rows(p)) do left[#left + 1] = r end
+  left[#left + 1] = row({
+    { n = G.UIT.C, config = { align = 'cm', padding = 0.08, r = 0.1, hover = true, colour = G.C.PURPLE, button = 'cfq_deck', shadow = true, minw = 2.8 }, nodes = { T('View deck (D)', 0.26) } } }, { align = 'cm', padding = 0.05 })
   left[#left + 1] = row({ T('Drag a saved answers_<name>.csv onto the game window to import old answers.', 0.2, LABEL) }, { padding = 0.05 })
 
   local right = { row({ T('What would you do? Order matters.', 0.3) }), row({ TREF(R, 'line', 0.26, G.C.GOLD) }, { padding = 0.04 }) }
-  for i, _ in ipairs(S.opts) do
-    right[#right + 1] = row({ TREF(R.opts, i, 0.26) }, {
-      padding = 0.04, r = 0.05, hover = true, colour = G.C.BLUE, button = 'cfq_opt', ref_table = { i = i }, minw = 6.8, shadow = true,
-    })
+  for i, o in ipairs(S.opts) do
+    local lines = {}
+    for _, ln in ipairs(wrap(o, 46)) do lines[#lines + 1] = row({ T(ln, 0.26) }) end
+    right[#right + 1] = row({
+      col({ T(i .. ')', 0.26, LABEL) }, { align = 'tl', minw = 0.55 }),
+      col(lines, { align = 'tl', minw = 5.4 }),
+      col({ TREF(R.opts, i, 0.26, G.C.GOLD) }, { align = 'tr', minw = 0.7 }),
+    }, { padding = 0.04, r = 0.05, hover = true, colour = G.C.BLUE, button = 'cfq_opt', ref_table = { i = i }, minw = 6.8, shadow = true })
   end
   local function field(name, key)
     return row({ T(FIELD_LABEL[name] .. ': ', 0.22, LABEL), TREF(R, key, 0.26) },
@@ -210,9 +216,9 @@ local function build_screen()
   })
 end
 
-local function show_position()
+local function show_position(keep)
   local p = list[S.idx]
-  load_draft(p)
+  if not keep then load_draft(p) end
   S.focus = 'moves'
   R.status, R.reveal, R.banner, R.rev1, R.rev2, R.rev3, R.rev4 = '', '', '', '', '', '', ''
   G.FUNCS.overlay_menu { definition = build_screen() }
@@ -228,6 +234,8 @@ function UI.open_quiz()
     answered = CFQ.answers.answered_set(CFQ.answers.load(fs, answers_path()), grader)
     S.idx = first_unanswered(1)
     UI.open = true
+    UI.prev_repeat = love.keyboard.hasKeyRepeat()
+    love.keyboard.setKeyRepeat(true)
     show_position()
   end)
   if not ok then UI.open = false; sendWarnMessage('ClownfishQuiz open: ' .. tostring(err), 'ClownfishQuiz') end
@@ -236,6 +244,8 @@ end
 function UI.close()
   if UI.open then write_draft() end
   UI.open = false
+  UI.view = nil
+  if UI.prev_repeat ~= nil then love.keyboard.setKeyRepeat(UI.prev_repeat); UI.prev_repeat = nil end
   if G.OVERLAY_MENU then G.FUNCS.exit_overlay_menu() end
 end
 
@@ -283,6 +293,22 @@ local function save_and_next()
   show_position()
 end
 
+local DV = nil
+local function open_deck()
+  if not UI.open or UI.view == 'deck' then return end
+  write_draft()
+  UI.view = 'deck'
+  local p = list[S.idx]
+  local ok, def = pcall(function() return CFQ.deckview.definition(p.deck_cards, 'cfq_deck_back', p.deck) end)
+  if ok then G.FUNCS.overlay_menu { definition = def } else UI.view = nil; R.status = 'Deck viewer failed'; sendWarnMessage('ClownfishQuiz deck: ' .. tostring(def), 'ClownfishQuiz') end
+end
+local function close_deck()
+  if UI.view ~= 'deck' then return end
+  UI.view = nil
+  show_position(true)
+end
+G.FUNCS.cfq_deck = function() open_deck() end
+G.FUNCS.cfq_deck_back = function() close_deck() end
 G.FUNCS.cfq_open = function() UI.open_quiz() end
 G.FUNCS.cfq_close = function() UI.close() end
 G.FUNCS.cfq_opt = function(e) toggle_move(e.config.ref_table.i) end
@@ -299,11 +325,17 @@ local function next_field(dir)
 end
 local function field_key(name) return ({ other = 'other', why = 'why', skip = 'skip_reason' })[name] end
 
-function UI.handle_key(key)
-  if key == 'f8' then if UI.open then UI.close() else UI.open_quiz() end return true end
+function UI.handle_key(key, scancode, isrepeat)
+  if key == 'f8' then if isrepeat then return true end if UI.open then UI.close() else UI.open_quiz() end return true end
   if not UI.open then return false end
   local ctrl = love.keyboard.isDown('lctrl', 'rctrl')
+  if UI.view == 'deck' then
+    if not isrepeat and (key == 'escape' or key == 'd') then close_deck() end
+    return true
+  end
+  if isrepeat and key ~= 'backspace' then return true end
   if key == 'escape' then UI.close(); return true end
+  if key == 'd' and (S.focus == 'moves' or S.focus == 'conf') then open_deck(); return true end
   if key == 'tab' then next_field(love.keyboard.isDown('lshift', 'rshift') and -1 or 1); return true end
   if (key == 'return' or key == 'kpenter') and ctrl then save_and_next(); return true end
   local f = S.focus
@@ -348,7 +380,7 @@ end
 
 function UI.install_input()
   local kp, ti, fd = love.keypressed, love.textinput, love.filedropped
-  love.keypressed = function(key, ...) if UI.handle_key(key) then return end return kp(key, ...) end
+  love.keypressed = function(key, sc, isrepeat) if UI.handle_key(key, sc, isrepeat) then return end return kp(key, sc, isrepeat) end
   love.textinput = function(t) if UI.handle_text(t) then return end if ti then return ti(t) end end
   love.filedropped = function(file) if UI.handle_drop(file) then return end if fd then return fd(file) end end
 end
