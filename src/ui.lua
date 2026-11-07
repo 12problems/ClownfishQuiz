@@ -1,8 +1,9 @@
 -- Quiz UI (keyboard-first, mouse works). Phase 1: "pick a move" categories.
 -- Reads only shipped scenarios; never touches run state.
 local UI = { open = false }
-local R = { banner = '', rev1 = '', rev2 = '', rev3 = '', rev4 = '', line = '', other = '', why = '', conf = '-', skip = '', status = '', reveal = '', focus_label = '', pos = '' }
-local S = { idx = 1, moves = {}, other = '', why = '', conf = '', skipped = false, skip_reason = '', focus = 'moves', saved = false }
+local R = { slots = {}, pagetxt = '', banner = '', rev1 = '', rev2 = '', rev3 = '', rev4 = '', line = '', other = '', why = '', conf = '-', skip = '', status = '', reveal = '', focus_label = '', pos = '' }
+local PAGE = 8
+local S = { page = 0, idx = 1, moves = {}, other = '', why = '', conf = '', skipped = false, skip_reason = '', focus = 'moves', saved = false }
 local list, answered, grader
 
 local FIELDS = { 'moves', 'other', 'why', 'conf', 'skip' }
@@ -124,11 +125,26 @@ local function refresh_text()
   R.focus_label = 'Typing in: ' .. FIELD_LABEL[S.focus] .. '   (Tab = next field)'
   local pos = list and list[S.idx]
   R.pos = pos and ('Question ' .. S.idx .. ' of ' .. #list .. '   (' .. pos.category .. ')   answered ' .. (function() local n = 0 for _ in pairs(answered or {}) do n = n + 1 end return n end)()) or ''
-  if S.opts then for i, o in ipairs(S.opts) do
-    local at
-    for j, m in ipairs(S.moves) do if m == o then at = j end end
-    R.opts[i] = at and ('<< ' .. at) or ''
-  end end
+  if S.opts then
+    local npages = math.max(1, math.ceil(#S.opts / PAGE))
+    R.pagetxt = 'Options ' .. (S.page * PAGE + 1) .. '-' .. math.min(#S.opts, (S.page + 1) * PAGE) .. ' of ' .. #S.opts .. '   (PgUp/PgDn or arrows for more)'
+    for k = 1, PAGE do
+      local i = S.page * PAGE + k
+      local o = S.opts[i]
+      local sl = R.slots[k]
+      if not sl then sl = {}; R.slots[k] = sl end
+      if o then
+        local at
+        for j, m in ipairs(S.moves) do if m == o then at = j end end
+        local ls = wrap(o, 50)
+        local l2 = ls[2] or ''
+        if #ls > 2 then l2 = trunc(l2 .. ' ' .. table.concat(ls, ' ', 3), 50) end
+        sl.l1, sl.l2, sl.mark, sl.key = ls[1] or '', l2, at and ('<< ' .. at) or '', k .. ')'
+      else
+        sl.l1, sl.l2, sl.mark, sl.key = '', '', '', ''
+      end
+    end
+  end
 end
 
 local function write_draft()
@@ -161,6 +177,8 @@ end
 local function build_screen()
   local p = list[S.idx]
   S.opts = {}
+  S.page = 0
+  R.slots = {}
   do
     local all = CFQ.util.split_list(p.options)
     local function base(o) return (o:gsub('%s*%(.*$', '')) end
@@ -184,15 +202,20 @@ local function build_screen()
   left[#left + 1] = row({ T('Drag a saved answers_<name>.csv onto the game window to import old answers.', 0.2, LABEL) }, { padding = 0.05 })
 
   local right = { row({ T('What would you do? Order matters.', 0.3) }), row({ TREF(R, 'line', 0.26, G.C.GOLD) }, { padding = 0.04 }) }
-  for i, o in ipairs(S.opts) do
-    local lines = {}
-    for _, ln in ipairs(wrap(o, 46)) do lines[#lines + 1] = row({ T(ln, 0.26) }) end
+  for k = 1, PAGE do
+    R.slots[k] = R.slots[k] or {}
+    local sl = R.slots[k]
     right[#right + 1] = row({
-      col({ T(i .. ')', 0.26, LABEL) }, { align = 'tl', minw = 0.55 }),
-      col(lines, { align = 'tl', minw = 5.4 }),
-      col({ TREF(R.opts, i, 0.26, G.C.GOLD) }, { align = 'tr', minw = 0.7 }),
-    }, { padding = 0.04, r = 0.05, hover = true, colour = G.C.BLUE, button = 'cfq_opt', ref_table = { i = i }, minw = 6.8, shadow = true })
+      col({ TREF(sl, 'key', 0.26, LABEL) }, { align = 'tl', minw = 0.55 }),
+      col({ row({ TREF(sl, 'l1', 0.26) }, { minh = 0.3 }), row({ TREF(sl, 'l2', 0.26) }, { minh = 0.3 }) }, { align = 'tl', minw = 5.4 }),
+      col({ TREF(sl, 'mark', 0.26, G.C.GOLD) }, { align = 'tr', minw = 0.7 }),
+    }, { padding = 0.03, r = 0.05, hover = true, colour = G.C.BLUE, button = 'cfq_opt', ref_table = { k = k }, minw = 6.8, shadow = true })
   end
+  right[#right + 1] = row({
+    { n = G.UIT.C, config = { align = 'cm', padding = 0.05, r = 0.1, hover = true, colour = G.C.GREY, button = 'cfq_prev', minw = 1.2 }, nodes = { T('< Prev', 0.24) } },
+    { n = G.UIT.C, config = { align = 'cm', padding = 0.05, r = 0.1, hover = true, colour = G.C.GREY, button = 'cfq_next_page', minw = 1.2 }, nodes = { T('More >', 0.24) } },
+    col({ TREF(R, 'pagetxt', 0.2, LABEL) }, { align = 'cl', padding = 0.05 }),
+  }, { padding = 0.02 })
   local function field(name, key)
     return row({ T(FIELD_LABEL[name] .. ': ', 0.22, LABEL), TREF(R, key, 0.26) },
       { padding = 0.04, r = 0.05, hover = true, colour = G.C.BLACK, button = 'cfq_focus', ref_table = { f = name }, minw = 6.8 })
@@ -311,7 +334,15 @@ G.FUNCS.cfq_deck = function() open_deck() end
 G.FUNCS.cfq_deck_back = function() close_deck() end
 G.FUNCS.cfq_open = function() UI.open_quiz() end
 G.FUNCS.cfq_close = function() UI.close() end
-G.FUNCS.cfq_opt = function(e) toggle_move(e.config.ref_table.i) end
+local function turn_page(d)
+  if not S.opts then return end
+  local npages = math.max(1, math.ceil(#S.opts / PAGE))
+  S.page = (S.page + d) % npages
+  refresh_text()
+end
+G.FUNCS.cfq_opt = function(e) toggle_move(S.page * PAGE + e.config.ref_table.k) end
+G.FUNCS.cfq_prev = function() turn_page(-1) end
+G.FUNCS.cfq_next_page = function() turn_page(1) end
 G.FUNCS.cfq_focus = function(e) S.focus = e.config.ref_table.f; refresh_text() end
 G.FUNCS.cfq_save = function() save_and_next() end
 G.FUNCS.cfq_skip = function() S.skipped = true; S.focus = 'skip'; refresh_text() end
@@ -333,7 +364,7 @@ function UI.handle_key(key, scancode, isrepeat)
     if not isrepeat and (key == 'escape' or key == 'd') then close_deck() end
     return true
   end
-  if isrepeat and key ~= 'backspace' then return true end
+  if isrepeat and key ~= 'backspace' and key ~= 'pagedown' and key ~= 'pageup' then return true end
   if key == 'escape' then UI.close(); return true end
   if key == 'd' and (S.focus == 'moves' or S.focus == 'conf') then open_deck(); return true end
   if key == 'tab' then next_field(love.keyboard.isDown('lshift', 'rshift') and -1 or 1); return true end
@@ -341,7 +372,7 @@ function UI.handle_key(key, scancode, isrepeat)
   local f = S.focus
   if f == 'moves' then
     local d = tonumber(key:match('^kp(%d)$') or key:match('^(%d)$') or '')
-    if d and d >= 1 then toggle_move(d) elseif key == 'backspace' then table.remove(S.moves); refresh_text(); write_draft() end
+    if key == 'pagedown' or key == 'down' then turn_page(1) elseif key == 'pageup' or key == 'up' then turn_page(-1) elseif d and d >= 1 and d <= PAGE then toggle_move(S.page * PAGE + d) elseif key == 'backspace' then table.remove(S.moves); refresh_text(); write_draft() end
   elseif f == 'conf' then
     local d = tonumber(key:match('^kp(%d)$') or key:match('^(%d)$') or '')
     if d and d >= 1 and d <= 5 then S.conf = tostring(d); refresh_text(); write_draft() end

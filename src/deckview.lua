@@ -74,15 +74,15 @@ function V.definition(deck_text, back_func, title)
           area:emplace(c)
         end
       end
-      rights[#rights + 1] = { n = G.UIT.R, config = { align = 'cm', padding = 0 }, nodes = { { n = G.UIT.O, config = { object = area } } } }
+      rights[#rights + 1] = { n = G.UIT.R, config = { align = 'cm', padding = 0.08 }, nodes = { { n = G.UIT.O, config = { object = area } } } }
     end
   end
   return create_UIBox_generic_options({
     back_func = back_func, back_label = 'Back (Esc)', minw = 12,
     contents = {
       { n = G.UIT.C, config = { align = 'cm', padding = 0.05 }, nodes = {
-        { n = G.UIT.R, config = { align = 'cm' }, nodes = { { n = G.UIT.T, config = { text = (title or 'Deck') .. ' - ' .. total .. ' cards', scale = 0.4, colour = G.C.UI.TEXT_LIGHT, shadow = true } } } },
-        { n = G.UIT.R, config = { align = 'cm', padding = 0.05 }, nodes = rights },
+        { n = G.UIT.R, config = { align = 'cm', minh = 0.9, padding = 0.1 }, nodes = { { n = G.UIT.T, config = { text = (title or 'Deck') .. ' - ' .. total .. ' cards', scale = 0.4, colour = G.C.UI.TEXT_LIGHT, shadow = true } } } },
+        { n = G.UIT.R, config = { align = 'cm', padding = 0.12 }, nodes = rights },
       } },
     },
   })
