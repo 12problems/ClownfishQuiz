@@ -1,0 +1,19 @@
+{
+  "id": "ClownfishQuiz",
+  "name": "Clownfish Contribution Quiz",
+  "display_name": "Clownfish Contribution Quiz",
+  "author": ["Rob"],
+  "description": "Answer real Balatro Multiplayer decisions while you wait in the queue. Reads only the scenarios it ships with; touches no game state.",
+  "prefix": "cfq",
+  "main_file": "core.lua",
+  "priority": 0,
+  "badge_colour": "F2994A",
+  "badge_text_colour": "FFFFFF",
+  "version": "0.1.0",
+  "dependencies": [
+    "Steamodded (>=1.0.0~BETA-1814a)",
+    "Lovely (>=0.10)",
+    "MultiplayerAPI (>=1.0.5)"
+  ],
+  "conflicts": []
+}
