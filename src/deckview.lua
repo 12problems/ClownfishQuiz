@@ -11,12 +11,13 @@ local SUIT_ORDER = { 'Spades', 'Hearts', 'Clubs', 'Diamonds' }
 
 -- "King of Spades [Steel, Gold Seal, +10 chips] x2" -> { suit, rank, enh, seal, edition, bonus, count }
 function V.parse_entry(s)
+  local raw = s
   s = s:gsub('^#%d+%s+', ''):gsub('%s*%(in hand%)', '')
   local count = tonumber(s:match(' x(%d+)$')) or 1
   s = s:gsub(' x%d+$', '')
   local rank, suit, rest = s:match('^(%w+) of (%a+)%s*(.*)$')
   if not rank then return nil end
-  local e = { rank = rank, suit = suit, count = count }
+  local e = { rank = rank, suit = suit, count = count, raw = raw }
   local inner = rest:match('%[(.*)%]')
   if inner then
     for tok in (inner .. ', '):gmatch('(.-), ') do
@@ -49,8 +50,25 @@ local function make_card(e, scale)
   return card
 end
 
+V.cards = {} -- { {card=, entry=} } of the currently open viewer
+
+-- Dim every card except the selected ones (when anything is selected).
+function V.refresh_selection(is_selected)
+  local any = false
+  for _, it in ipairs(V.cards) do if is_selected(it.entry) then any = true end end
+  for _, it in ipairs(V.cards) do
+    local sel = is_selected(it.entry)
+    it.card.greyed = any and not sel or false
+    pcall(function() it.card:highlight(sel) end)
+    if sel and it.card.juice_up then pcall(function() it.card:juice_up(0.3, 0.3) end) end
+  end
+end
+
 -- Returns a UIBox definition for the viewer. back_func: G.FUNCS name run by the Back button.
-function V.definition(deck_text, back_func, title)
+-- o (optional): { on_pick = fn(entry, card), is_selected = fn(entry), ref = table with .deckhint/.targets text }
+function V.definition(deck_text, back_func, title, o)
+  o = o or {}
+  V.cards = {}
   local entries = V.parse_deck(deck_text)
   local by_suit, total = { Spades = {}, Hearts = {}, Clubs = {}, Diamonds = {} }, 0
   for _, e in ipairs(entries) do
@@ -73,6 +91,12 @@ function V.definition(deck_text, back_func, title)
           c.T.y = area.T.y
           c:hard_set_T()
           area:emplace(c)
+          V.cards[#V.cards + 1] = { card = c, entry = e }
+          if o.on_pick then
+            c.states.click.can = true
+            c.states.hover.can = true
+            c.click = function(self) o.on_pick(e, self) end
+          end
         end
       end
       rights[#rights + 1] = { n = G.UIT.R, config = { align = 'cm', padding = 0.08 }, nodes = { { n = G.UIT.O, config = { object = area } } } }
@@ -83,6 +107,8 @@ function V.definition(deck_text, back_func, title)
     contents = {
       { n = G.UIT.C, config = { align = 'cm', padding = 0.05 }, nodes = {
         { n = G.UIT.R, config = { align = 'cm', minh = 0.9, padding = 0.1 }, nodes = { { n = G.UIT.T, config = { text = (title or 'Deck') .. ' - ' .. total .. ' cards', scale = 0.4, colour = G.C.UI.TEXT_LIGHT, shadow = true } } } },
+        o.ref and { n = G.UIT.R, config = { align = 'cm' }, nodes = { { n = G.UIT.T, config = { ref_table = o.ref, ref_value = 'deckhint', scale = 0.3, colour = G.C.GOLD, shadow = true } } } } or nil,
+        o.ref and { n = G.UIT.R, config = { align = 'cm' }, nodes = { { n = G.UIT.T, config = { ref_table = o.ref, ref_value = 'targets', scale = 0.26, colour = G.C.WHITE, shadow = true } } } } or nil,
         { n = G.UIT.R, config = { align = 'cm', padding = 0.12 }, nodes = rights },
       } },
     },

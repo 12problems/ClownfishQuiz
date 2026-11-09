@@ -1,13 +1,31 @@
 -- Quiz UI (keyboard-first, mouse works). Phase 1: "pick a move" categories.
 -- Reads only shipped scenarios; never touches run state.
 local UI = { open = false }
-local R = { slots = {}, pagetxt = '', banner = '', rev1 = '', rev2 = '', rev3 = '', rev4 = '', line = '', other = '', why = '', conf = '-', skip = '', status = '', reveal = '', focus_label = '', pos = '' }
+local R = { deckhint = '', targets = '', slots = {}, pagetxt = '', banner = '', rev1 = '', rev2 = '', rev3 = '', rev4 = '', line = '', other = '', why = '', conf = '-', skip = '', status = '', reveal = '', focus_label = '', pos = '' }
 local PAGE = 8
-local S = { page = 0, idx = 1, moves = {}, other = '', why = '', conf = '', skipped = false, skip_reason = '', focus = 'moves', saved = false }
+local S = { tcards = {}, page = 0, idx = 1, moves = {}, other = '', why = '', conf = '', skipped = false, skip_reason = '', focus = 'moves', saved = false }
 local list, answered, grader
 
 local FIELDS = { 'moves', 'other', 'why', 'conf', 'skip' }
 local FIELD_LABEL = { moves = 'Moves (press 1-9 or click)', other = 'Other move (type)', why = 'Why (type)', conf = 'Confidence (press 1-5)', skip = 'Skip reason (type)' }
+
+-- ---------- tarot targets ----------
+local function is_tarot(p) return p and p.category == 'tarot_targets' end
+local function tarot_max(p)
+  if p.tarot_name == 'Death' then return 2 end
+  return tonumber(tostring(p.tarot_need or '1'):match('(%d+)$')) or 1
+end
+local function short_card(raw) return (raw or ''):gsub('%s*%(in hand%)', '') end
+local function targets_text(p)
+  if not is_tarot(p) then return '' end
+  if #S.tcards == 0 then return 'No target cards chosen yet' end
+  if p.tarot_name == 'Death' then
+    return 'Copy: ' .. short_card(S.tcards[1]) .. (S.tcards[2] and ('   Overwrite: ' .. short_card(S.tcards[2])) or '   (now click the card to overwrite)')
+  end
+  local t = {}
+  for _, c in ipairs(S.tcards) do t[#t + 1] = short_card(c) end
+  return 'Target: ' .. table.concat(t, ' ; ')
+end
 
 -- ---------- file helpers ----------
 local fs = {
@@ -134,6 +152,7 @@ local function refresh_text()
   R.why = S.why .. (S.focus == 'why' and '_' or '')
   R.conf = (S.conf ~= '' and S.conf or '-') .. (S.focus == 'conf' and ' (type 1-5)' or '')
   R.skip = S.skip_reason .. (S.focus == 'skip' and '_' or '')
+  do local pp = list and list[S.idx]; R.targets = targets_text(pp) end
   R.focus_label = 'Typing in: ' .. FIELD_LABEL[S.focus] .. '   (Tab = next field)'
   local pos = list and list[S.idx]
   R.pos = pos and ('Question ' .. S.idx .. ' of ' .. #list .. '   (' .. pos.category .. ')   answered ' .. (function() local n = 0 for _ in pairs(answered or {}) do n = n + 1 end return n end)()) or ''
@@ -162,18 +181,19 @@ end
 local function write_draft()
   local p = list and list[S.idx]
   if not p then return end
-  local d = { position_id = p.position_id, moves = S.moves, other = S.other, why = S.why, conf = S.conf, skipped = S.skipped, skip_reason = S.skip_reason }
+  local d = { position_id = p.position_id, moves = S.moves, other = S.other, why = S.why, conf = S.conf, skipped = S.skipped, skip_reason = S.skip_reason, tcards = S.tcards }
   fs.write(draft_path(), JSON.encode(d))
 end
 function write_draft_clear() fs.write(draft_path(), '') end
 local function load_draft(p)
-  S.moves, S.other, S.why, S.conf, S.skipped, S.skip_reason, S.saved = {}, '', '', '', false, '', false
+  S.moves, S.other, S.why, S.conf, S.skipped, S.skip_reason, S.saved, S.tcards = {}, '', '', '', false, '', false, {}
   local raw = fs.read(draft_path())
   if raw and raw ~= '' then
     local ok, d = pcall(JSON.decode, raw)
     if ok and d and d.position_id == p.position_id then
       S.moves, S.other, S.why, S.conf = d.moves or {}, d.other or '', d.why or '', d.conf or ''
       S.skipped, S.skip_reason = d.skipped and true or false, d.skip_reason or ''
+      S.tcards = d.tcards or {}
     end
   end
 end
@@ -221,6 +241,7 @@ local function build_screen()
     head = { row({ T('What would you do? Order matters.', 0.3) }) }
   end
   local right = { head[1], head[2] or row({}), row({ TREF(R, 'line', 0.26, G.C.GOLD) }, { padding = 0.04 }) }
+  if is_tarot(p) then right[#right + 1] = row({ TREF(R, 'targets', 0.26, G.C.WHITE) }, { padding = 0.04 }) end
   for k = 1, math.min(PAGE, #S.opts) do
     R.slots[k] = R.slots[k] or {}
     local sl = R.slots[k]
@@ -317,10 +338,23 @@ local function save_and_next()
     local best = table.concat(S.moves, ' > ')
     if S.other ~= '' then best = (best ~= '' and best .. ' > ' or '') .. 'Other: ' .. S.other end
     if best == '' and not S.skipped then R.status = 'Pick at least one move (or Skip with a reason)'; return end
+    local notnow = is_tarot(p) and best:find("Don't use it now", 1, true) ~= nil
+    if is_tarot(p) and not S.skipped and not notnow then
+      local need = (p.tarot_name == 'Death') and 2 or 1
+      if #S.tcards < need then R.status = 'Press D and click the target card' .. (need > 1 and 's (copy, then overwrite)' or '') .. ' in the deck first'; return end
+    end
     if S.skipped and S.skip_reason == '' then R.status = 'Skipping needs a reason'; S.focus = 'skip'; refresh_text(); return end
     local row_ = { position_id = p.position_id, grader = grader, timestamp = os.date('!%Y-%m-%dT%H:%M:%SZ'),
       best_move = S.skipped and '' or best, confidence = S.conf, why = S.why, skipped = S.skipped and '1' or '0',
       skip_reason = S.skip_reason, revealed_after = '1' }
+    if is_tarot(p) and not S.skipped then
+      if notnow then row_.tarot_not_now = '1'
+      else
+        row_.tarot_not_now = '0'
+        if p.tarot_name == 'Death' then row_.tarot_choice, row_.tarot_choice2 = S.tcards[1] or '', S.tcards[2] or ''
+        else row_.tarot_choice = table.concat(S.tcards, ' | ') end
+      end
+    end
     CFQ.answers.upsert(fs, answers_path(), row_)
     answered[p.position_id] = true
     S.saved = true
@@ -336,14 +370,50 @@ local function save_and_next()
   show_position()
 end
 
+local function picked_raw(raw)
+  for _, c in ipairs(S.tcards) do if c == raw then return true end end
+  return false
+end
+local function deck_opts(p)
+  if not is_tarot(p) then return nil end
+  local mx = tarot_max(p)
+  local function hint()
+    if p.tarot_name == 'Death' then R.deckhint = 'Death: click the card to COPY, then the card to OVERWRITE (click a chosen card to remove it)'
+    else R.deckhint = 'Click up to ' .. mx .. ' target card(s) for ' .. tostring(p.tarot_name) .. ' (click a chosen card again to remove it)' end
+  end
+  hint()
+  R.targets = targets_text(p)
+  return {
+    ref = R,
+    is_selected = function(e) return picked_raw(e.raw) end,
+    on_pick = function(e, card)
+      if picked_raw(e.raw) then
+        for i, c in ipairs(S.tcards) do if c == e.raw then table.remove(S.tcards, i); break end end
+        hint()
+      elseif #S.tcards >= mx then
+        R.deckhint = 'Already ' .. mx .. ' card(s) chosen - click a chosen card to remove it first'
+      else
+        S.tcards[#S.tcards + 1] = e.raw
+        hint()
+      end
+      R.targets = targets_text(p)
+      write_draft()
+      CFQ.deckview.refresh_selection(function(en) return picked_raw(en.raw) end)
+    end,
+  }
+end
+
 local DV = nil
 local function open_deck()
   if not UI.open or UI.view == 'deck' then return end
   write_draft()
   UI.view = 'deck'
   local p = list[S.idx]
-  local ok, def = pcall(function() return CFQ.deckview.definition(p.deck_cards, 'cfq_deck_back', (p.deck and p.deck ~= '?') and p.deck or 'Deck') end)
-  if ok then G.FUNCS.overlay_menu { definition = def } else UI.view = nil; R.status = 'Deck viewer failed'; sendWarnMessage('ClownfishQuiz deck: ' .. tostring(def), 'ClownfishQuiz') end
+  local ok, def = pcall(function() return CFQ.deckview.definition(p.deck_cards, 'cfq_deck_back', (p.deck and p.deck ~= '?') and p.deck or 'Deck', deck_opts(p)) end)
+  if ok then
+    G.FUNCS.overlay_menu { definition = def }
+    if is_tarot(p) and #S.tcards > 0 then CFQ.deckview.refresh_selection(function(en) return picked_raw(en.raw) end) end
+  else UI.view = nil; R.status = 'Deck viewer failed'; sendWarnMessage('ClownfishQuiz deck: ' .. tostring(def), 'ClownfishQuiz') end
 end
 local function close_deck()
   if UI.view ~= 'deck' then return end
