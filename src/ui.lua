@@ -201,7 +201,14 @@ local function build_screen()
     { n = G.UIT.C, config = { align = 'cm', padding = 0.08, r = 0.1, hover = true, colour = G.C.PURPLE, button = 'cfq_deck', shadow = true, minw = 2.8 }, nodes = { T('View deck (D)', 0.26) } } }, { align = 'cm', padding = 0.05 })
   left[#left + 1] = row({ T('Drag a saved answers_<name>.csv onto the game window to import old answers.', 0.2, LABEL) }, { padding = 0.05 })
 
-  local right = { row({ T('What would you do? Order matters.', 0.3) }), row({ TREF(R, 'line', 0.26, G.C.GOLD) }, { padding = 0.04 }) }
+  local head
+  if p.category == 'tarot_targets' then
+    head = { row({ T('You hold ' .. tostring(p.tarot_name) .. '. Would you use it for value or for scoring?', 0.3, G.C.GOLD) }),
+             row({ T('Look at the deck (D). Say why in the box below, e.g. which cards.', 0.22, LABEL) }) }
+  else
+    head = { row({ T('What would you do? Order matters.', 0.3) }) }
+  end
+  local right = { head[1], head[2] or row({}), row({ TREF(R, 'line', 0.26, G.C.GOLD) }, { padding = 0.04 }) }
   for k = 1, PAGE do
     R.slots[k] = R.slots[k] or {}
     local sl = R.slots[k]

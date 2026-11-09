@@ -4,8 +4,8 @@ usage: python build_data.py positions.csv out/positions.dat [--key CLOWNFISH]
 Keep the plaintext CSV OUT of the repo.
 """
 import argparse, csv, io, json, sys
-KEEP_CATEGORIES = {"buy_or_save", "sell_to_replace", "reroll_or_leave", "pack_pick", "tarot_use"}  # shop-phase decisions only
-DROP = {"play_hand", "tarot_name", "tarot_need", "bot_top3", "play_table", "joker_order_scores", "game_id", "decision_index", "notes", "seen_before", "retrigger", "source"}
+KEEP_CATEGORIES = {"buy_or_save", "sell_to_replace", "reroll_or_leave", "pack_pick", "tarot_use", "tarot_targets"}  # shop-phase decisions (+ tarot targets, asked as value/scoring intent)
+DROP = {"play_hand", "bot_top3", "play_table", "joker_order_scores", "game_id", "decision_index", "notes", "seen_before", "retrigger", "source"}
 
 def xor(data: bytes, key: bytes) -> bytes:
     return bytes(b ^ key[i % len(key)] for i, b in enumerate(data))
@@ -16,6 +16,9 @@ def main():
     a = ap.parse_args()
     rows = [r for r in csv.DictReader(open(a.src, encoding="utf-8-sig", newline="")) if r["category"] in KEEP_CATEGORIES]
     out = [{k: v for k, v in r.items() if k not in DROP} for r in rows]
+    for r in out:
+        if r["category"] == "tarot_targets":
+            r["options"] = "Use it for scoring | Use it for value | Don't use it now"
     payload = json.dumps({"v": 1, "positions": out}, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     open(a.dst, "wb").write(xor(payload, a.key.encode()))
     print("wrote", a.dst, len(out), "positions,", len(payload), "bytes")

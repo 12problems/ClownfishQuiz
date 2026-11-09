@@ -11,6 +11,7 @@ local SUIT_ORDER = { 'Spades', 'Hearts', 'Clubs', 'Diamonds' }
 
 -- "King of Spades [Steel, Gold Seal, +10 chips] x2" -> { suit, rank, enh, seal, edition, bonus, count }
 function V.parse_entry(s)
+  s = s:gsub('^#%d+%s+', ''):gsub('%s*%(in hand%)', '')
   local count = tonumber(s:match(' x(%d+)$')) or 1
   s = s:gsub(' x%d+$', '')
   local rank, suit, rest = s:match('^(%w+) of (%a+)%s*(.*)$')

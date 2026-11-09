@@ -13,7 +13,7 @@ function D.load()
 end
 
 -- Shop-phase decisions only (tarot_targets, hand_play, joker_order were dropped by Rob, 2026-11-09).
-D.PHASE1 = { buy_or_save = true, sell_to_replace = true, reroll_or_leave = true, pack_pick = true, tarot_use = true }
+D.PHASE1 = { buy_or_save = true, sell_to_replace = true, reroll_or_leave = true, pack_pick = true, tarot_use = true, tarot_targets = true }
 
 function D.playable(positions)
   local out = {}
