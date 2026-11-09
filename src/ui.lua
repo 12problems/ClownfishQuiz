@@ -490,7 +490,7 @@ open_settings = function(first_run)
   if not UI.open then return end
   write_draft()
   UI.view = 'settings'
-  S.name = CFQ.config.grader_name or ''
+  S.name = grader_name()
   S.name_focus = true
   R.setmsg = ''
   G.FUNCS.overlay_menu { definition = build_settings(first_run) }
@@ -515,7 +515,7 @@ local function import_folder()
     if name:lower():match('^answers.*%.csv$') then
       local text = love.filesystem.read(dir .. '/' .. name)
       if text then
-        local a, s_ = CFQ.answers.import_text(fs, answers_path(), text)
+        local a, s_ = CFQ.answers.import_text(fs, answers_path(), text, grader)
         added, skipped, files = added + a, skipped + s_, files + 1
       end
     end
@@ -632,7 +632,7 @@ function UI.handle_drop(file)
   if not name:lower():match('answers.*%.csv$') then return false end
   file:open('r'); local text = file:read(); file:close()
   grader = grader_name()
-  local added, skipped = CFQ.answers.import_text(fs, answers_path(), text)
+  local added, skipped = CFQ.answers.import_text(fs, answers_path(), text, grader)
   if answered then answered = CFQ.answers.answered_set(CFQ.answers.load(fs, answers_path()), grader) end
   R.status = 'Imported ' .. added .. ' answers (' .. skipped .. ' already present)'
   R.setmsg = R.status

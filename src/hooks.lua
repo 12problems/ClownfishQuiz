@@ -18,19 +18,20 @@ local function tick()
   if CFQ.ui and CFQ.ui.tick_run then CFQ.ui.tick_run() end
 end
 
+-- Driven from love.update (not G.E_MANAGER events): starting a run clears the event queue,
+-- which would silently end an event-based poll chain.
 function H.install()
-  local function schedule()
-    G.E_MANAGER:add_event(Event({
-      trigger = 'after', delay = 0.25, blockable = false, blocking = false,
-      func = function()
-        local ok, err = pcall(tick)
-        if not ok then sendWarnMessage('ClownfishQuiz tick: ' .. tostring(err), 'ClownfishQuiz') end
-        schedule()
-        return true
-      end,
-    }))
+  local acc = 0
+  local orig = love.update
+  love.update = function(dt, ...)
+    acc = acc + (dt or 0)
+    if acc >= 0.25 then
+      acc = 0
+      local ok, err = pcall(tick)
+      if not ok then sendWarnMessage('ClownfishQuiz tick: ' .. tostring(err), 'ClownfishQuiz') end
+    end
+    return orig(dt, ...)
   end
-  schedule()
 end
 
 return H

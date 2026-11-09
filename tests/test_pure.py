@@ -52,3 +52,13 @@ assert (added, skipped) == (1, 1), (added, skipped)
 rows = list(csv.DictReader(io.StringIO(store[p], newline='')))
 assert [r['position_id'] for r in rows] == ['q1', 'q2', 'q9'] and rows[0]['best_move'] == 'Sell Y'
 print("all pure tests passed")
+
+# import relabels rows to the current grader
+store.clear()
+p2 = A.path('d', 'NewName')
+old2 = "position_id,grader,best_move\r\nq5,OldName,X\r\nq6,OldName,Y\r\n"
+assert tuple(A.import_text(fs, p2, old2, 'NewName')) == (2, 0)
+assert tuple(A.import_text(fs, p2, old2, 'NewName')) == (0, 2)
+rows = list(csv.DictReader(io.StringIO(store[p2], newline='')))
+assert all(r['grader'] == 'NewName' for r in rows), rows
+print("import relabel test passed")

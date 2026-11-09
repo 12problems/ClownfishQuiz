@@ -45,11 +45,12 @@ end
 
 -- Import another answers file's contents (string). Existing rows (same id+grader) win.
 -- Returns added, skipped.
-function A.import_text(fs, path, text)
+function A.import_text(fs, path, text, as_grader)
   local have, rows = {}, A.load(fs, path)
   for _, r in ipairs(rows) do have[r.grader .. '\0' .. r.position_id] = true end
   local added, skipped = 0, 0
   for _, r in ipairs(U.csv_dicts(text)) do
+    if as_grader and as_grader ~= '' then r.grader = as_grader end -- imported answers become the current name's
     local k = (r.grader or '') .. '\0' .. (r.position_id or '')
     if (r.position_id or '') == '' then skipped = skipped + 1
     elseif have[k] then skipped = skipped + 1
