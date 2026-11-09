@@ -38,9 +38,21 @@ local function build_index()
     end
   end
 end
+local key_index
 local function find_center(name)
   if not name_index then build_index() end
-  return name_index[norm(name)]
+  local n = norm(name)
+  if name_index[n] then return name_index[n] end
+  if not key_index then
+    key_index = {}
+    for k, c in pairs(G.P_CENTERS or {}) do
+      if c.set == 'Joker' then
+        local base = k:lower():gsub('^j_', ''):gsub('^mp_', ''):gsub('^mpj_', ''):gsub('[^%w]', '')
+        if not key_index[base] or k:find('mp') then key_index[base] = c end
+      end
+    end
+  end
+  return key_index[n]
 end
 local function mini_sprite(name)
   local c = find_center(name)
@@ -128,7 +140,7 @@ local function refresh_text()
   if S.opts then
     local npages = math.max(1, math.ceil(#S.opts / PAGE))
     R.pagetxt = 'Options ' .. (S.page * PAGE + 1) .. '-' .. math.min(#S.opts, (S.page + 1) * PAGE) .. ' of ' .. #S.opts .. '   (PgUp/PgDn or arrows for more)'
-    for k = 1, PAGE do
+    for k = 1, math.min(PAGE, #S.opts) do
       local i = S.page * PAGE + k
       local o = S.opts[i]
       local sl = R.slots[k]
@@ -193,7 +205,7 @@ local function build_screen()
   local left = {
     row({ TREF(R, 'banner', 0.4, G.C.GOLD) }, { align = 'cm', minh = 0.5 }),
     row({ TREF(R, 'pos', 0.28, LABEL) }),
-    row({ T(p.stake .. ' - ' .. p.deck .. ' - ante ' .. tostring(p.ante), 0.3) }),
+    row({ T(p.stake .. ((p.deck and p.deck ~= '?') and (' - ' .. p.deck) or '') .. ' - ante ' .. tostring(p.ante), 0.3) }),
     row(joker_boxes(p), { align = 'tl', padding = 0.05 }),
   }
   for _, r in ipairs(info_rows(p)) do left[#left + 1] = r end
@@ -204,12 +216,12 @@ local function build_screen()
   local head
   if p.category == 'tarot_targets' then
     head = { row({ T('You hold ' .. tostring(p.tarot_name) .. '. Would you use it for value or for scoring?', 0.3, G.C.GOLD) }),
-             row({ T('Look at the deck (D). Say why in the box below, e.g. which cards.', 0.22, LABEL) }) }
+             row({ T('Look at the deck (press D). Then fill in "Why" below: say which cards you would target.', 0.26, G.C.WHITE) }) }
   else
     head = { row({ T('What would you do? Order matters.', 0.3) }) }
   end
   local right = { head[1], head[2] or row({}), row({ TREF(R, 'line', 0.26, G.C.GOLD) }, { padding = 0.04 }) }
-  for k = 1, PAGE do
+  for k = 1, math.min(PAGE, #S.opts) do
     R.slots[k] = R.slots[k] or {}
     local sl = R.slots[k]
     right[#right + 1] = row({
@@ -218,11 +230,11 @@ local function build_screen()
       col({ TREF(sl, 'mark', 0.26, G.C.GOLD) }, { align = 'tr', minw = 0.7 }),
     }, { padding = 0.03, r = 0.05, hover = true, colour = G.C.BLUE, button = 'cfq_opt', ref_table = { k = k }, minw = 6.8, shadow = true })
   end
-  right[#right + 1] = row({
+  if #S.opts > PAGE then right[#right + 1] = row({
     { n = G.UIT.C, config = { align = 'cm', padding = 0.05, r = 0.1, hover = true, colour = G.C.GREY, button = 'cfq_prev', minw = 1.2 }, nodes = { T('< Prev', 0.24) } },
     { n = G.UIT.C, config = { align = 'cm', padding = 0.05, r = 0.1, hover = true, colour = G.C.GREY, button = 'cfq_next_page', minw = 1.2 }, nodes = { T('More >', 0.24) } },
     col({ TREF(R, 'pagetxt', 0.2, LABEL) }, { align = 'cl', padding = 0.05 }),
-  }, { padding = 0.02 })
+  }, { padding = 0.02 }) end
   local function field(name, key)
     return row({ T(FIELD_LABEL[name] .. ': ', 0.22, LABEL), TREF(R, key, 0.26) },
       { padding = 0.04, r = 0.05, hover = true, colour = G.C.BLACK, button = 'cfq_focus', ref_table = { f = name }, minw = 6.8 })
@@ -317,6 +329,7 @@ local function save_and_next()
     R.reveal = 'Ctrl+Enter for next question'
     write_draft_clear()
     R.status = 'Saved'
+    refresh_text()
     return
   end
   S.idx = first_unanswered(S.idx + 1)
@@ -329,7 +342,7 @@ local function open_deck()
   write_draft()
   UI.view = 'deck'
   local p = list[S.idx]
-  local ok, def = pcall(function() return CFQ.deckview.definition(p.deck_cards, 'cfq_deck_back', p.deck) end)
+  local ok, def = pcall(function() return CFQ.deckview.definition(p.deck_cards, 'cfq_deck_back', (p.deck and p.deck ~= '?') and p.deck or 'Deck') end)
   if ok then G.FUNCS.overlay_menu { definition = def } else UI.view = nil; R.status = 'Deck viewer failed'; sendWarnMessage('ClownfishQuiz deck: ' .. tostring(def), 'ClownfishQuiz') end
 end
 local function close_deck()
