@@ -22,3 +22,11 @@ CFQ.config = CFQ.config or {}
 CFQ.hooks.install()
 CFQ.ui.install_input()
 CFQ.ui.install_menu_button()
+
+-- Steamodded config tab: a button that opens the quiz (settings are inside the quiz: press S).
+CFQ.config_tab = function()
+  return { n = G.UIT.ROOT, config = { align = 'cm', padding = 0.2, colour = G.C.BLACK, r = 0.1 }, nodes = {
+    UIBox_button { button = 'cfq_open', colour = G.C.ORANGE, minw = 4, minh = 0.7, label = { 'Open Clownfish Quiz' }, scale = 0.4 },
+    { n = G.UIT.R, config = { align = 'cm', padding = 0.1 }, nodes = { { n = G.UIT.T, config = { text = 'Settings: press S inside the quiz (name, answers folder, import).', scale = 0.3, colour = G.C.UI.TEXT_LIGHT } } } },
+  } }
+end

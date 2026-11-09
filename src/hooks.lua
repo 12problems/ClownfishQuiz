@@ -15,6 +15,7 @@ local function tick()
     if CFQ.ui and CFQ.ui.on_match_found then CFQ.ui.on_match_found() end
   end
   H.was_queued, H.was_committed = queued, committed
+  if CFQ.ui and CFQ.ui.tick_run then CFQ.ui.tick_run() end
 end
 
 function H.install()

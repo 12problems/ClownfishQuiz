@@ -1,10 +1,11 @@
 -- Quiz UI (keyboard-first, mouse works). Phase 1: "pick a move" categories.
 -- Reads only shipped scenarios; never touches run state.
 local UI = { open = false }
-local R = { deckhint = '', targets = '', slots = {}, pagetxt = '', banner = '', rev1 = '', rev2 = '', rev3 = '', rev4 = '', line = '', other = '', why = '', conf = '-', skip = '', status = '', reveal = '', focus_label = '', pos = '' }
+local R = { name = '', setmsg = '', deckhint = '', targets = '', slots = {}, pagetxt = '', banner = '', rev1 = '', rev2 = '', rev3 = '', rev4 = '', line = '', other = '', why = '', conf = '-', skip = '', status = '', reveal = '', focus_label = '', pos = '' }
 local PAGE = 8
-local S = { tcards = {}, page = 0, idx = 1, moves = {}, other = '', why = '', conf = '', skipped = false, skip_reason = '', focus = 'moves', saved = false }
+local S = { name = '', name_focus = false, tcards = {}, page = 0, idx = 1, moves = {}, other = '', why = '', conf = '', skipped = false, skip_reason = '', focus = 'moves', saved = false }
 local list, answered, grader
+local open_settings -- forward declaration (defined below)
 
 local FIELDS = { 'moves', 'other', 'why', 'conf', 'skip' }
 local FIELD_LABEL = { moves = 'Moves (press 1-9 or click)', other = 'Other move (type)', why = 'Why (type)', conf = 'Confidence (press 1-5)', skip = 'Skip reason (type)' }
@@ -36,6 +37,18 @@ local function grader_name()
   if CFQ.config and CFQ.config.grader_name and CFQ.config.grader_name ~= '' then return CFQ.config.grader_name end
   local n = MPAPI and MPAPI.connection_state and MPAPI.connection_state.display_name
   return (n and n ~= '') and n or 'player'
+end
+local SETTINGS_PATH = CFQ.DIR .. '/settings.json'
+local function load_settings()
+  CFQ.config = CFQ.config or {}
+  local raw = fs.read(SETTINGS_PATH)
+  if raw and raw ~= '' then
+    local ok, d = pcall(JSON.decode, raw)
+    if ok and type(d) == 'table' then CFQ.config.grader_name = d.grader_name; CFQ.config.import_prompted = d.import_prompted end
+  end
+end
+local function save_settings()
+  fs.write(SETTINGS_PATH, JSON.encode({ grader_name = CFQ.config.grader_name or '', import_prompted = CFQ.config.import_prompted and true or false }))
 end
 local function answers_path() return CFQ.answers.path(CFQ.DIR, grader) end
 local function draft_path() return CFQ.DIR .. '/draft_' .. CFQ.answers.safe_name(grader) .. '.json' end
@@ -230,7 +243,8 @@ local function build_screen()
   }
   for _, r in ipairs(info_rows(p)) do left[#left + 1] = r end
   left[#left + 1] = row({
-    { n = G.UIT.C, config = { align = 'cm', padding = 0.08, r = 0.1, hover = true, colour = G.C.PURPLE, button = 'cfq_deck', shadow = true, minw = 2.8 }, nodes = { T('View deck (D)', 0.26) } } }, { align = 'cm', padding = 0.05 })
+    { n = G.UIT.C, config = { align = 'cm', padding = 0.08, r = 0.1, hover = true, colour = G.C.PURPLE, button = 'cfq_deck', shadow = true, minw = 2.8 }, nodes = { T('View deck (D)', 0.26) } },
+    { n = G.UIT.C, config = { align = 'cm', padding = 0.08, r = 0.1, hover = true, colour = G.C.GREY, button = 'cfq_settings', shadow = true, minw = 2.2 }, nodes = { T('Settings (S)', 0.26) } } }, { align = 'cm', padding = 0.05 })
   left[#left + 1] = row({ T('Drag a saved answers_<name>.csv onto the game window to import old answers.', 0.2, LABEL) }, { padding = 0.05 })
 
   local head
@@ -290,6 +304,7 @@ end
 function UI.open_quiz()
   if UI.open then return end
   local ok, err = pcall(function()
+    load_settings()
     grader = grader_name()
     local all = CFQ.data.load()
     list = CFQ.data.playable(all)
@@ -297,9 +312,11 @@ function UI.open_quiz()
     answered = CFQ.answers.answered_set(CFQ.answers.load(fs, answers_path()), grader)
     S.idx = first_unanswered(1)
     UI.open = true
+    UI.first_run = not CFQ.config.import_prompted
     UI.prev_repeat = love.keyboard.hasKeyRepeat()
     love.keyboard.setKeyRepeat(true)
     show_position()
+    if UI.first_run then open_settings(true) end
   end)
   if not ok then UI.open = false; sendWarnMessage('ClownfishQuiz open: ' .. tostring(err), 'ClownfishQuiz') end
 end
@@ -424,7 +441,7 @@ local function close_deck()
 end
 G.FUNCS.cfq_deck = function() open_deck() end
 G.FUNCS.cfq_deck_back = function() close_deck() end
-G.FUNCS.cfq_open = function() UI.open_quiz() end
+G.FUNCS.cfq_open = function() if UI.allowed_now() then UI.open_quiz() end end
 G.FUNCS.cfq_close = function() UI.close() end
 local function turn_page(d)
   if not S.opts then return end
@@ -439,6 +456,114 @@ G.FUNCS.cfq_focus = function(e) S.focus = e.config.ref_table.f; refresh_text() e
 G.FUNCS.cfq_save = function() save_and_next() end
 G.FUNCS.cfq_skip = function() S.skipped = true; S.focus = 'skip'; refresh_text() end
 
+
+-- ---------- settings view ----------
+local function name_text() return S.name .. (UI.view == 'settings' and S.name_focus and '_' or '') end
+local function build_settings(first_run)
+  R.name, R.setmsg = name_text(), R.setmsg or ''
+  local path_line = 'Answers file: ' .. 'Balatro/' .. CFQ.DIR .. '/answers_' .. CFQ.answers.safe_name(grader_name()) .. '.csv'
+  local lines = {}
+  local function para(txt, scale, colour)
+    for _, ln in ipairs(wrap(txt, 78)) do lines[#lines + 1] = row({ T(ln, scale or 0.26, colour or G.C.WHITE) }) end
+  end
+  if first_run then
+    para('Welcome! If you already answered questions with the earlier grader tool, you can import that file now.', 0.3, G.C.GOLD)
+  else
+    para('Settings', 0.34, G.C.GOLD)
+  end
+  lines[#lines + 1] = row({ T('Name for your answers file: ', 0.26, LABEL), TREF(R, 'name', 0.3, G.C.WHITE) },
+    { padding = 0.06, r = 0.05, hover = true, colour = G.C.BLACK, button = 'cfq_name_focus', minw = 7 })
+  para('Type to change it. By default it is your account name. Use the same name as before so your old answers are recognised.', 0.22, LABEL)
+  para(path_line, 0.22, LABEL)
+  lines[#lines + 1] = row({
+    { n = G.UIT.C, config = { align = 'cm', padding = 0.08, r = 0.1, hover = true, colour = G.C.BLUE, button = 'cfq_open_folder', shadow = true, minw = 3 }, nodes = { T('Open answers folder', 0.26) } },
+    { n = G.UIT.C, config = { align = 'cm', padding = 0.08, r = 0.1, hover = true, colour = G.C.GREEN, button = 'cfq_import_folder', shadow = true, minw = 3 }, nodes = { T('Import answers now', 0.26) } },
+  }, { align = 'cm', padding = 0.06 })
+  para('To import old answers: 1) press "Open answers folder". 2) Inside it create a folder named import (if it does not exist). 3) Copy your old answers_<name>.csv file into that import folder. 4) Come back and press "Import answers now". Answers you already have in this mod are never overwritten.', 0.22, G.C.WHITE)
+  para('Shortcut: you can also drag the old answers_<name>.csv file onto the game window while this menu is open.', 0.22, LABEL)
+  lines[#lines + 1] = row({ TREF(R, 'setmsg', 0.28, G.C.GOLD) })
+  return create_UIBox_generic_options({ back_func = 'cfq_settings_back', back_label = first_run and 'Continue (Esc)' or 'Back (Esc)', minw = 10,
+    contents = { col(lines, { align = 'tl', padding = 0.05 }) } })
+end
+
+open_settings = function(first_run)
+  if not UI.open then return end
+  write_draft()
+  UI.view = 'settings'
+  S.name = CFQ.config.grader_name or ''
+  S.name_focus = true
+  R.setmsg = ''
+  G.FUNCS.overlay_menu { definition = build_settings(first_run) }
+end
+local function close_settings()
+  if UI.view ~= 'settings' then return end
+  local n = S.name:gsub('^%s+', ''):gsub('%s+$', '')
+  CFQ.config.grader_name = (n ~= '') and n or nil
+  CFQ.config.import_prompted = true
+  save_settings()
+  UI.view = nil
+  grader = grader_name()
+  answered = CFQ.answers.answered_set(CFQ.answers.load(fs, answers_path()), grader)
+  S.idx = first_unanswered(S.idx)
+  show_position()
+end
+local function import_folder()
+  local dir = CFQ.DIR .. '/import'
+  love.filesystem.createDirectory(dir)
+  local added, skipped, files = 0, 0, 0
+  for _, name in ipairs(love.filesystem.getDirectoryItems(dir)) do
+    if name:lower():match('^answers.*%.csv$') then
+      local text = love.filesystem.read(dir .. '/' .. name)
+      if text then
+        local a, s_ = CFQ.answers.import_text(fs, answers_path(), text)
+        added, skipped, files = added + a, skipped + s_, files + 1
+      end
+    end
+  end
+  if files == 0 then R.setmsg = 'No answers*.csv found in the import folder yet. Press "Open answers folder", create/open "import", copy your file in, then try again.'
+  else R.setmsg = 'Imported ' .. added .. ' answers from ' .. files .. ' file(s) (' .. skipped .. ' already present).' end
+  answered = CFQ.answers.answered_set(CFQ.answers.load(fs, answers_path()), grader)
+end
+G.FUNCS.cfq_settings = function() open_settings(false) end
+G.FUNCS.cfq_settings_back = function() close_settings() end
+G.FUNCS.cfq_name_focus = function() S.name_focus = true; R.name = name_text() end
+G.FUNCS.cfq_open_folder = function()
+  love.filesystem.createDirectory(CFQ.DIR .. '/import')
+  love.system.openURL('file://' .. love.filesystem.getSaveDirectory() .. '/' .. CFQ.DIR)
+end
+G.FUNCS.cfq_import_folder = function() import_folder() end
+
+-- ---------- in-run (PvP ready) gating ----------
+local function in_pvp_downtime()
+  return G.STAGE == G.STAGES.RUN and G.STATE == G.STATES.BLIND_SELECT
+    and PVP and PVP.GAME and PVP.GAME.ready_blind and true or false
+end
+function UI.allowed_now()
+  if G.STAGE ~= G.STAGES.RUN then return true end -- menus / queue screens
+  return in_pvp_downtime()
+end
+function UI.tick_run()
+  local downtime = in_pvp_downtime()
+  local in_run = G.STAGE == G.STAGES.RUN
+  if downtime and not UI.open and not UI.icon then
+    UI.icon = UIBox {
+      definition = { n = G.UIT.ROOT, config = { align = 'cm', colour = G.C.CLEAR }, nodes = {
+        UIBox_button { id = 'cfq_icon', button = 'cfq_open', colour = G.C.ORANGE, minw = 1.7, minh = 0.5, label = { 'Quiz (F8)' }, scale = 0.28 } } },
+      config = { align = 'tr', offset = { x = -0.2, y = 0.3 }, major = G.ROOM_ATTACH, bond = 'Weak' },
+    }
+  elseif (not downtime or UI.open) and UI.icon then
+    UI.icon:remove(); UI.icon = nil
+  end
+  if UI.open and in_run and not downtime and not UI.leaving then
+    UI.leaving = true
+    write_draft()
+    R.banner = 'GAME STARTING - progress saved'
+    R.status = R.banner
+    refresh_text()
+    G.E_MANAGER:add_event(Event({ trigger = 'after', delay = 2.0, blockable = false, func = function() UI.leaving = false; UI.close(); return true end }))
+  end
+end
+
 -- ---------- keyboard ----------
 local function next_field(dir)
   local at = 1
@@ -449,16 +574,26 @@ end
 local function field_key(name) return ({ other = 'other', why = 'why', skip = 'skip_reason' })[name] end
 
 function UI.handle_key(key, scancode, isrepeat)
-  if key == 'f8' then if isrepeat then return true end if UI.open then UI.close() else UI.open_quiz() end return true end
+  if key == 'f8' then
+    if isrepeat then return true end
+    if UI.open then UI.close() elseif UI.allowed_now() then UI.open_quiz() end
+    return true
+  end
   if not UI.open then return false end
   local ctrl = love.keyboard.isDown('lctrl', 'rctrl')
   if UI.view == 'deck' then
     if not isrepeat and (key == 'escape' or key == 'd') then close_deck() end
     return true
   end
+  if UI.view == 'settings' then
+    if key == 'backspace' then S.name = S.name:sub(1, math.max(0, #S.name - 1)); R.name = name_text()
+    elseif not isrepeat and (key == 'escape' or key == 'return' or key == 'kpenter') then close_settings() end
+    return true
+  end
   if isrepeat and key ~= 'backspace' and key ~= 'pagedown' and key ~= 'pageup' then return true end
   if key == 'escape' then UI.close(); return true end
   if key == 'd' and (S.focus == 'moves' or S.focus == 'conf') then open_deck(); return true end
+  if key == 's' and (S.focus == 'moves' or S.focus == 'conf') then open_settings(false); return true end
   if key == 'tab' then next_field(love.keyboard.isDown('lshift', 'rshift') and -1 or 1); return true end
   if (key == 'return' or key == 'kpenter') and ctrl then save_and_next(); return true end
   local f = S.focus
@@ -481,6 +616,8 @@ end
 
 function UI.handle_text(t)
   if not UI.open then return false end
+  if UI.view == 'settings' then if #S.name < 24 then S.name = S.name .. t; R.name = name_text() end return true end
+  if UI.view == 'deck' then return true end
   local f = S.focus
   if f == 'other' then S.other = S.other .. t
   elseif f == 'why' then S.why = S.why .. t
@@ -498,6 +635,7 @@ function UI.handle_drop(file)
   local added, skipped = CFQ.answers.import_text(fs, answers_path(), text)
   if answered then answered = CFQ.answers.answered_set(CFQ.answers.load(fs, answers_path()), grader) end
   R.status = 'Imported ' .. added .. ' answers (' .. skipped .. ' already present)'
+  R.setmsg = R.status
   return true
 end
 
