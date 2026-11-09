@@ -12,7 +12,7 @@ function D.load()
   return D.positions
 end
 
--- v1 phase: the "pick a move" categories only (tarot_targets, hand_play, joker_order come later).
+-- Shop-phase decisions only (tarot_targets, hand_play, joker_order were dropped by Rob, 2026-11-09).
 D.PHASE1 = { buy_or_save = true, sell_to_replace = true, reroll_or_leave = true, pack_pick = true, tarot_use = true }
 
 function D.playable(positions)
