@@ -328,6 +328,8 @@ local function toggle_move(i)
   for j, m in ipairs(S.moves) do
     if m == o then table.remove(S.moves, j); refresh_text(); write_draft(); return end
   end
+  local pp = list[S.idx]
+  if pp and pp.category == 'tarot_targets' then S.moves = {} end -- one intent only
   S.moves[#S.moves + 1] = o
   refresh_text(); write_draft()
 end

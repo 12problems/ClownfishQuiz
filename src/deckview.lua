@@ -107,8 +107,9 @@ function V.definition(deck_text, back_func, title, o)
     contents = {
       { n = G.UIT.C, config = { align = 'cm', padding = 0.05 }, nodes = {
         { n = G.UIT.R, config = { align = 'cm', minh = 0.9, padding = 0.1 }, nodes = { { n = G.UIT.T, config = { text = (title or 'Deck') .. ' - ' .. total .. ' cards', scale = 0.4, colour = G.C.UI.TEXT_LIGHT, shadow = true } } } },
-        o.ref and { n = G.UIT.R, config = { align = 'cm' }, nodes = { { n = G.UIT.T, config = { ref_table = o.ref, ref_value = 'deckhint', scale = 0.3, colour = G.C.GOLD, shadow = true } } } } or nil,
-        o.ref and { n = G.UIT.R, config = { align = 'cm' }, nodes = { { n = G.UIT.T, config = { ref_table = o.ref, ref_value = 'targets', scale = 0.26, colour = G.C.WHITE, shadow = true } } } } or nil,
+        o.ref and { n = G.UIT.R, config = { align = 'cm', minh = 0.45, padding = 0.05 }, nodes = { { n = G.UIT.T, config = { ref_table = o.ref, ref_value = 'deckhint', scale = 0.3, colour = G.C.GOLD, shadow = true } } } } or nil,
+        o.ref and { n = G.UIT.R, config = { align = 'cm', minh = 0.45, padding = 0.05 }, nodes = { { n = G.UIT.T, config = { ref_table = o.ref, ref_value = 'targets', scale = 0.26, colour = G.C.WHITE, shadow = true } } } } or nil,
+        { n = G.UIT.R, config = { align = 'cm', minh = 0.5 }, nodes = {} },
         { n = G.UIT.R, config = { align = 'cm', padding = 0.12 }, nodes = rights },
       } },
     },
